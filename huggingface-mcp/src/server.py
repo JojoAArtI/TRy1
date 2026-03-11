@@ -2,36 +2,84 @@
 HuggingFace MCP Server
 Gives Claude the ability to search models, datasets, pull model cards,
 compare benchmarks, and explore the HuggingFace Hub directly.
+
+Setup:
+    1. Copy .env.example to .env and add your HuggingFace token (optional)
+    2. pip install -e ".[dev]"
+    3. python -m huggingface_mcp
+
+Or add to claude_desktop_config.json:
+    { "mcpServers": { "huggingface": { "command": "huggingface-mcp" } } }
 """
 
 import json
+import os
+import sys
 import httpx
 from typing import Optional, List
 from pydantic import BaseModel, Field, ConfigDict
 from mcp.server.fastmcp import FastMCP
 
-mcp = FastMCP("huggingface_mcp")
+# ── Load environment variables ────────────────────────────────────────────────
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # dotenv is optional — users can set env vars directly
+
+# ── Configuration ─────────────────────────────────────────────────────────────
 
 HF_API_BASE = "https://huggingface.co/api"
 HF_HUB_BASE = "https://huggingface.co"
+HF_TOKEN = os.environ.get("HF_TOKEN")
+
+mcp = FastMCP("huggingface_mcp")
+
+
+def _get_auth_headers() -> dict:
+    """Build auth headers if HF_TOKEN is available."""
+    if HF_TOKEN:
+        return {"Authorization": f"Bearer {HF_TOKEN}"}
+    return {}
+
+
+def _check_setup():
+    """Print a helpful startup message showing config status."""
+    token_status = "✅ authenticated" if HF_TOKEN else "⚠️  no token (public API only — set HF_TOKEN for gated models & higher rate limits)"
+    print(f"🤗 HuggingFace MCP Server starting...")
+    print(f"   Token: {token_status}")
+    if not HF_TOKEN:
+        print(f"   💡 Get a token at: https://huggingface.co/settings/tokens")
+        print(f"   💡 Set it via: export HF_TOKEN=hf_... or add to .env file")
+    print()
 
 
 # ── Shared HTTP client ────────────────────────────────────────────────────────
 
 async def hf_get(path: str, params: dict = None) -> dict:
-    """Make a GET request to the HuggingFace API."""
+    """Make a GET request to the HuggingFace API with optional auth."""
+    headers = _get_auth_headers()
     async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.get(f"{HF_API_BASE}{path}", params=params or {})
+        resp = await client.get(
+            f"{HF_API_BASE}{path}",
+            params=params or {},
+            headers=headers,
+        )
         resp.raise_for_status()
         return resp.json()
 
 
 def _handle_error(e: Exception) -> str:
     if isinstance(e, httpx.HTTPStatusError):
+        if e.response.status_code == 401:
+            return "Error: Authentication failed. Check your HF_TOKEN in .env or environment variables."
+        if e.response.status_code == 403:
+            return "Error: Access denied. This model/dataset may be gated — set a valid HF_TOKEN to access it."
         if e.response.status_code == 404:
             return "Error: Resource not found on HuggingFace Hub."
         if e.response.status_code == 429:
-            return "Error: Rate limit hit. Try again shortly."
+            return "Error: Rate limit hit. Try again shortly, or set HF_TOKEN for higher limits."
         return f"Error: HuggingFace API returned status {e.response.status_code}."
     return f"Error: {type(e).__name__}: {e}"
 
@@ -274,5 +322,13 @@ async def hf_trending(params: TrendingInput) -> str:
         return _handle_error(e)
 
 
-if __name__ == "__main__":
+# ── Entry point ───────────────────────────────────────────────────────────────
+
+def main():
+    """Main entry point for the HuggingFace MCP server."""
+    _check_setup()
     mcp.run()
+
+
+if __name__ == "__main__":
+    main()

@@ -2,6 +2,52 @@
 
 > Run this before every PR. It classifies your commits, catches common issues, and writes your PR description for you.
 
+## Quick Setup
+
+### 1. Install
+
+```bash
+cd prcheck
+pip install -e .
+
+# With AI commit classification (optional — uses HuggingFace model)
+pip install -e ".[ai]"
+```
+
+### 2. Configure
+
+Run the interactive setup wizard:
+
+```bash
+prcheck setup
+```
+
+This will prompt you for:
+- **Anthropic API key** — for PR description generation ([get one here](https://console.anthropic.com/settings/keys))
+- **HuggingFace token** — for private commit classifier models ([get one here](https://huggingface.co/settings/tokens))
+- **Model ID** — the HuggingFace model for commit classification
+
+Configuration is saved to `~/.prcheck/config.json`.
+
+Alternatively, set environment variables or use a `.env` file:
+
+```bash
+cp .env.example .env
+# Edit .env with your keys
+```
+
+### 3. Run
+
+```bash
+prcheck                        # Run all checks
+prcheck --generate-pr-desc     # Also generate a PR description
+prcheck --base develop         # Compare against a specific base branch
+prcheck --json                 # Output results as JSON (for CI)
+prcheck --model user/model     # Override the commit classifier model
+```
+
+## Example output
+
 ```
 $ prcheck --generate-pr-desc
 
@@ -30,30 +76,9 @@ $ prcheck --generate-pr-desc
 📄 Generating PR description...
 
 ## Summary
-This PR adds JWT-based authentication to the API, fixes a null pointer
-exception in the user service, and refactors auth logic into a dedicated
-module for better separation of concerns.
-...
+This PR adds JWT-based authentication to the API...
 
 💾 Saved to PR_DESCRIPTION.md
-```
-
-## Install
-
-```bash
-pip install prcheck
-
-# With AI commit classification (uses your-username/commit-classifier from HuggingFace)
-pip install "prcheck[ai]"
-```
-
-## Usage
-
-```bash
-prcheck                        # Run all checks
-prcheck --generate-pr-desc     # Also generate a PR description
-prcheck --base develop         # Compare against a specific base branch
-prcheck --json                 # Output results as JSON (for CI)
 ```
 
 ## What it checks
@@ -72,6 +97,9 @@ prcheck --json                 # Output results as JSON (for CI)
 ```yaml
 # .github/workflows/pr-check.yml
 - name: Run prcheck
+  env:
+    ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    PRCHECK_MODEL: your-username/commit-classifier
   run: |
     pip install prcheck
     prcheck --json > prcheck-results.json
@@ -79,7 +107,7 @@ prcheck --json                 # Output results as JSON (for CI)
 
 ## Powered by
 
-- **[commit-classifier](https://huggingface.co/your-username/commit-classifier)** — fine-tuned DistilBERT for commit message classification
+- **[commit-classifier](../commit-classifier)** — fine-tuned DistilBERT for commit message classification
 - **Claude API** — for PR description generation
 
 ## License

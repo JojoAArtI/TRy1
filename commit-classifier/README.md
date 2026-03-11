@@ -4,7 +4,50 @@
 
 **Labels**: `feat` · `fix` · `refactor` · `chore` · `docs` · `test` · `perf`
 
-## Use the model (HuggingFace Hub)
+## Quick Setup
+
+### 1. Install
+
+```bash
+cd commit-classifier
+pip install -e .
+```
+
+### 2. Configure HuggingFace token (for Hub publishing)
+
+Get a token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens), then:
+
+```bash
+# Copy the example env file
+cp .env.example .env
+# Edit .env → set HF_TOKEN and HF_USERNAME
+```
+
+### 3. Train the model
+
+```bash
+# Train with the built-in seed dataset (105 samples)
+python train.py
+
+# Train with your own data (CSV or JSONL)
+python train.py --data-file my_commits.csv
+
+# Train AND publish to HuggingFace Hub
+python train.py --push-to-hub --hub-model-id your-username/commit-classifier
+```
+
+### 4. Run inference
+
+```bash
+# From local model
+python train.py --predict "fix null pointer in user service"
+# {"label": "fix", "confidence": 0.9821, "scores": {...}}
+
+# From a HuggingFace Hub model
+python train.py --predict "add JWT auth" --model-path your-username/commit-classifier
+```
+
+## Use the model (Python)
 
 ```python
 from transformers import pipeline
@@ -14,21 +57,21 @@ classifier("add JWT authentication to API")
 # [{'label': 'feat', 'score': 0.97}]
 ```
 
-## Train it yourself
+## Training data format
 
-```bash
-pip install -r requirements.txt
-python train.py
+You can supply your own training data via `--data-file`:
 
-# Push to HuggingFace Hub
-python train.py --push-to-hub --hub-model-id your-username/commit-classifier
+**CSV format** (no header, or header with non-label values):
+```csv
+add user auth,feat
+fix crash on login,fix
+update README,docs
 ```
 
-## Run inference
-
-```bash
-python train.py --predict "fix null pointer in user service"
-# {"label": "fix", "confidence": 0.9821, "scores": {...}}
+**JSONL format**:
+```json
+{"text": "add user auth", "label": "feat"}
+{"text": "fix crash on login", "label": "fix"}
 ```
 
 ## Model details
@@ -38,7 +81,7 @@ python train.py --predict "fix null pointer in user service"
 | Base model | `distilbert-base-uncased` |
 | Parameters | ~66M |
 | Labels | 7 (feat, fix, refactor, chore, docs, test, perf) |
-| Training size | ~56 samples (expand for production) |
+| Built-in training size | 105 samples (15 per label) |
 
 ## Used by `prcheck` CLI
 

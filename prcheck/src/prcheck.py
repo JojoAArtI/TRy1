@@ -8,11 +8,17 @@ Runs before you open a pull request:
   • Detects missing tests
   • Auto-generates a PR description using Claude
 
+Setup:
+    prcheck setup              # Interactive setup — stores config in ~/.prcheck/config.json
+    prcheck                    # Run all checks on current branch
+    prcheck --generate-pr-desc # Also generate a PR description
+
 Usage:
     prcheck                        # Run all checks on current branch
     prcheck --generate-pr-desc     # Also generate a PR description
     prcheck --base main            # Compare against a specific base branch
     prcheck --json                 # Output results as JSON
+    prcheck setup                  # Configure API keys and model ID
 """
 
 import subprocess
@@ -20,9 +26,133 @@ import sys
 import re
 import json
 import argparse
+import os
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
 from typing import Optional
+
+# ── Load environment variables ────────────────────────────────────────────────
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+# ── Configuration ─────────────────────────────────────────────────────────────
+
+CONFIG_DIR = Path.home() / ".prcheck"
+CONFIG_FILE = CONFIG_DIR / "config.json"
+
+DEFAULT_MODEL_ID = "your-username/commit-classifier"
+
+
+def load_config() -> dict:
+    """Load configuration from ~/.prcheck/config.json and environment variables.
+
+    Priority: env vars > config file > defaults
+    """
+    config = {
+        "anthropic_api_key": None,
+        "hf_token": None,
+        "model_id": DEFAULT_MODEL_ID,
+    }
+
+    # Layer 1: config file
+    if CONFIG_FILE.exists():
+        try:
+            with open(CONFIG_FILE) as f:
+                file_config = json.load(f)
+            config.update({k: v for k, v in file_config.items() if v})
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # Layer 2: environment variables (highest priority)
+    env_mappings = {
+        "ANTHROPIC_API_KEY": "anthropic_api_key",
+        "HF_TOKEN": "hf_token",
+        "PRCHECK_MODEL": "model_id",
+    }
+    for env_key, config_key in env_mappings.items():
+        val = os.environ.get(env_key)
+        if val:
+            config[config_key] = val
+
+    return config
+
+
+def save_config(config: dict):
+    """Save configuration to ~/.prcheck/config.json."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(config, f, indent=2)
+    # Protect the config file (contains secrets)
+    try:
+        CONFIG_FILE.chmod(0o600)
+    except OSError:
+        pass
+
+
+def run_setup():
+    """Interactive setup wizard for prcheck configuration."""
+    print("🔧 prcheck setup")
+    print("=" * 50)
+    print()
+
+    existing = load_config()
+
+    # Anthropic API key
+    print("1️⃣  Anthropic API Key (for PR description generation)")
+    print("   Get one at: https://console.anthropic.com/settings/keys")
+    current = existing.get("anthropic_api_key")
+    if current:
+        masked = current[:10] + "..." + current[-4:]
+        print(f"   Current: {masked}")
+    api_key = input("   Enter key (or press Enter to keep current): ").strip()
+    if api_key:
+        existing["anthropic_api_key"] = api_key
+    print()
+
+    # HuggingFace token
+    print("2️⃣  HuggingFace Token (for private commit-classifier models)")
+    print("   Get one at: https://huggingface.co/settings/tokens")
+    current = existing.get("hf_token")
+    if current:
+        masked = current[:6] + "..." + current[-4:]
+        print(f"   Current: {masked}")
+    hf_token = input("   Enter token (or press Enter to skip/keep): ").strip()
+    if hf_token:
+        existing["hf_token"] = hf_token
+    print()
+
+    # Model ID
+    print("3️⃣  Commit Classifier Model ID")
+    print("   This is the HuggingFace model used to classify commits.")
+    current = existing.get("model_id", DEFAULT_MODEL_ID)
+    print(f"   Current: {current}")
+    model_id = input("   Enter model ID (or press Enter to keep current): ").strip()
+    if model_id:
+        existing["model_id"] = model_id
+    print()
+
+    save_config(existing)
+    print(f"✅ Configuration saved to {CONFIG_FILE}")
+    print()
+
+    # Validate
+    config = load_config()
+    if not config.get("anthropic_api_key"):
+        print("⚠️  No Anthropic API key set — PR description generation won't work.")
+        print("   You can still use all other checks.")
+    else:
+        print("✅ Anthropic API key configured")
+
+    if config.get("model_id") == DEFAULT_MODEL_ID:
+        print("⚠️  Using default model ID — update after publishing your model.")
+    else:
+        print(f"✅ Model: {config['model_id']}")
+    print()
+
 
 # ── Git helpers ───────────────────────────────────────────────────────────────
 
@@ -156,6 +286,8 @@ def check_secrets(diff: str) -> CheckResult:
         (r'(?i)(api_key|secret_key|password|token)\s*=\s*["\'][^"\']{8,}["\']', "hardcoded secret"),
         (r'sk-[a-zA-Z0-9]{32,}', "OpenAI API key pattern"),
         (r'ghp_[a-zA-Z0-9]{36}', "GitHub personal access token"),
+        (r'sk-ant-api03-[a-zA-Z0-9]{32,}', "Anthropic API key pattern"),
+        (r'hf_[a-zA-Z0-9]{34,}', "HuggingFace token pattern"),
     ]
     found = []
     for line in diff.splitlines():
@@ -173,42 +305,64 @@ def check_secrets(diff: str) -> CheckResult:
     return CheckResult(name="secrets", passed=True, severity="info", message="✅ No obvious secrets detected")
 
 
-def classify_commits(commits: list[dict]) -> list[dict]:
+def classify_commits(commits: list[dict], config: dict) -> list[dict]:
     """Classify commits using the HuggingFace model if available, else use regex heuristics."""
+    model_id = config.get("model_id", DEFAULT_MODEL_ID)
+
     try:
         from transformers import pipeline
-        classifier = pipeline("text-classification", model="your-username/commit-classifier", device=-1)
+        print(f"   Using model: {model_id}")
+        classifier = pipeline("text-classification", model=model_id, device=-1)
         for c in commits:
             result = classifier(c["message"])[0]
             c["label"] = result["label"]
             c["confidence"] = round(result["score"], 3)
-    except Exception:
-        # Fallback: simple prefix heuristic
-        prefix_map = {
-            "feat": r'^(feat|add|new|implement|support)',
-            "fix": r'^(fix|bug|hotfix|patch|resolve|correct)',
-            "refactor": r'^(refactor|clean|rename|move|extract|split|simplify)',
-            "docs": r'^(docs|doc|readme|comment|changelog)',
-            "test": r'^(test|spec|coverage)',
-            "perf": r'^(perf|optim|cache|speed|lazy|reduce)',
-            "chore": r'^(chore|bump|upgrade|update|ci|cd|build|deps)',
-        }
-        for c in commits:
-            msg = c["message"].lower()
-            label = "chore"
-            for lbl, pat in prefix_map.items():
-                if re.search(pat, msg):
-                    label = lbl
-                    break
-            c["label"] = label
-            c["confidence"] = None
+    except ImportError:
+        print("   ⚠️  transformers not installed — using regex fallback")
+        print("   💡 Install with: pip install 'prcheck[ai]'")
+        _classify_regex_fallback(commits)
+    except Exception as e:
+        print(f"   ⚠️  Model loading failed ({e}) — using regex fallback")
+        _classify_regex_fallback(commits)
+
     return commits
+
+
+def _classify_regex_fallback(commits: list[dict]):
+    """Fallback: simple prefix heuristic for commit classification."""
+    prefix_map = {
+        "feat": r'^(feat|add|new|implement|support|create)',
+        "fix": r'^(fix|bug|hotfix|patch|resolve|correct)',
+        "refactor": r'^(refactor|clean|rename|move|extract|split|simplify|rewrite|convert|decouple)',
+        "docs": r'^(docs|doc|readme|comment|changelog|document)',
+        "test": r'^(test|spec|coverage)',
+        "perf": r'^(perf|optim|cache|speed|lazy|reduce|compress|batch|memoize)',
+        "chore": r'^(chore|bump|upgrade|update|ci|cd|build|deps|configure|migrate|remove|clean|sync|pin|archive)',
+    }
+    for c in commits:
+        msg = c["message"].lower()
+        label = "chore"
+        for lbl, pat in prefix_map.items():
+            if re.search(pat, msg):
+                label = lbl
+                break
+        c["label"] = label
+        c["confidence"] = None
 
 
 # ── PR Description Generator ─────────────────────────────────────────────────
 
-def generate_pr_description(commits: list[dict], diff_summary: dict, changed_files: list[str]) -> str:
+def generate_pr_description(commits: list[dict], diff_summary: dict,
+                            changed_files: list[str], config: dict) -> str:
     """Call Claude API to generate a PR description."""
+    api_key = config.get("anthropic_api_key")
+    if not api_key:
+        return (
+            "(Could not generate PR description: No Anthropic API key configured.\n"
+            " Run 'prcheck setup' or set ANTHROPIC_API_KEY environment variable.\n"
+            " Get a key at: https://console.anthropic.com/settings/keys)"
+        )
+
     try:
         import urllib.request
 
@@ -246,6 +400,7 @@ Format:
             data=json.dumps(payload).encode(),
             headers={
                 "Content-Type": "application/json",
+                "x-api-key": api_key,
                 "anthropic-version": "2023-06-01",
             }
         )
@@ -258,7 +413,7 @@ Format:
 
 # ── CLI entry point ───────────────────────────────────────────────────────────
 
-def run_checks(base: str, generate_desc: bool, output_json: bool):
+def run_checks(base: str, generate_desc: bool, output_json: bool, config: dict):
     print(f"\n🔍 prcheck — comparing against '{base}'\n{'─'*50}")
 
     try:
@@ -274,7 +429,7 @@ def run_checks(base: str, generate_desc: bool, output_json: bool):
         sys.exit(0)
 
     # Classify commits
-    commits = classify_commits(commits)
+    commits = classify_commits(commits, config)
 
     # Run checks
     checks = [
@@ -330,7 +485,7 @@ def run_checks(base: str, generate_desc: bool, output_json: bool):
     # Generate PR description
     if generate_desc:
         print(f"\n{'─'*50}\n📄 Generating PR description...\n")
-        desc = generate_pr_description(commits, diff_stats, changed_files)
+        desc = generate_pr_description(commits, diff_stats, changed_files, config)
         print(desc)
 
         # Write to file for easy copy-paste
@@ -342,15 +497,39 @@ def main():
     parser = argparse.ArgumentParser(
         description="prcheck — pre-PR quality checker",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__
+        epilog="""
+Commands:
+  prcheck                        Run all checks on current branch
+  prcheck setup                  Configure API keys and preferences
+
+Examples:
+  prcheck                        Run checks (compare against auto-detected base)
+  prcheck --base develop         Compare against 'develop' branch
+  prcheck --generate-pr-desc     Generate a PR description with Claude
+  prcheck --json                 Output results as JSON (for CI)
+  prcheck --model user/model     Override the commit classifier model
+        """
     )
+
+    # Handle 'setup' subcommand
+    if len(sys.argv) > 1 and sys.argv[1] == "setup":
+        run_setup()
+        return
+
     parser.add_argument("--base", "-b", default=None, help="Base branch to compare against (default: auto-detect)")
     parser.add_argument("--generate-pr-desc", "-g", action="store_true", help="Generate a PR description using Claude")
     parser.add_argument("--json", action="store_true", dest="output_json", help="Output results as JSON")
+    parser.add_argument("--model", type=str, default=None, help="Override the commit classifier model ID")
     args = parser.parse_args()
 
+    config = load_config()
+
+    # CLI flag overrides config
+    if args.model:
+        config["model_id"] = args.model
+
     base = args.base or get_base_branch()
-    run_checks(base=base, generate_desc=args.generate_pr_desc, output_json=args.output_json)
+    run_checks(base=base, generate_desc=args.generate_pr_desc, output_json=args.output_json, config=config)
 
 
 if __name__ == "__main__":

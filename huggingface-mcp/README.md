@@ -2,6 +2,63 @@
 
 > MCP server that gives Claude direct access to the HuggingFace Hub — search models, pull model cards, compare benchmarks, and explore trending datasets.
 
+## Quick Setup
+
+### 1. Install
+
+```bash
+cd huggingface-mcp
+pip install -e .
+```
+
+### 2. Configure (optional but recommended)
+
+Get a HuggingFace API token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens), then:
+
+```bash
+# Option A: Copy the example env file and fill in your token
+cp .env.example .env
+# Edit .env → set HF_TOKEN=hf_your_actual_token
+
+# Option B: Set it directly in your shell
+export HF_TOKEN=hf_your_actual_token
+```
+
+> **Note:** The server works without a token (public API), but a token gives you:
+> - Access to gated/private models
+> - Higher API rate limits
+> - Access to private datasets
+
+### 3. Run
+
+```bash
+# Direct
+python src/server.py
+
+# Or as a module
+python -m src
+
+# Or via the CLI entry point (after pip install)
+huggingface-mcp
+```
+
+### 4. Add to Claude Desktop
+
+Add to your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "huggingface": {
+      "command": "huggingface-mcp",
+      "env": {
+        "HF_TOKEN": "hf_your_token_here"
+      }
+    }
+  }
+}
+```
+
 ## Tools
 
 | Tool | Description |
@@ -19,24 +76,6 @@
 - *"What datasets are trending on HuggingFace right now?"*
 - *"Pull the model card for mistralai/Mistral-7B-v0.1"*
 
-## Quickstart
-
-```bash
-pip install huggingface-mcp
-```
-
-Add to your `claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "huggingface": {
-      "command": "huggingface-mcp"
-    }
-  }
-}
-```
-
 ## Development
 
 ```bash
@@ -45,8 +84,6 @@ cd huggingface-mcp
 pip install -e ".[dev]"
 python src/server.py
 ```
-
-No API key required — uses the public HuggingFace API.
 
 ## License
 
