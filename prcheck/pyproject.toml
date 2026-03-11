@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "prcheck"
+version = "0.1.0"
+description = "Pre-PR quality checker — classifies commits, detects TODOs, warns about large diffs, and generates PR descriptions with Claude"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = ["git", "pr", "pull-request", "cli", "developer-tools", "ai"]
+dependencies = []
+
+[project.optional-dependencies]
+ai = ["transformers>=4.40.0", "torch>=2.0.0"]
+
+[project.scripts]
+prcheck = "prcheck:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
